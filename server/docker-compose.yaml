@@ -6,11 +6,9 @@ services:
       context: ..  # Set context to parent directory
       dockerfile: server/dev.Dockerfile
     ports:
-      - "8888:8000"
+      - "8998:8000"
     env_file:
       - .env
-    networks:
-      - mem0_network
     volumes:
       - ./history:/app/history      # History db location. By default, it creates a history.db file on the server folder
       - .:/app                      # Server code. This allows to reload the app when the server code is updated
@@ -29,8 +27,6 @@ services:
       image: ankane/pgvector:v0.5.1
       restart: on-failure
       shm_size: "128mb" # Increase this if vacuuming fails with a "no space left on device" error
-      networks:
-        - mem0_network
       environment:
         - POSTGRES_USER=postgres
         - POSTGRES_PASSWORD=postgres
@@ -45,8 +41,6 @@ services:
         - "8432:5432"
   neo4j:
     image: neo4j:5.26.4
-    networks:
-      - mem0_network
     healthcheck:
       test: wget http://localhost:7687 || exit 1
       interval: 1s
@@ -68,7 +62,3 @@ services:
 volumes:
   neo4j_data:
   postgres_db:
-
-networks:
-  mem0_network:
-    driver: bridge

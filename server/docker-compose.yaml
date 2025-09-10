@@ -1,64 +1,119 @@
-name: mem0-dev
-
+# docker-compose.memory-optimized.yml
 services:
   mem0:
     build:
-      context: ..  # Set context to parent directory
+      context: ..
       dockerfile: server/dev.Dockerfile
+    container_name: mem0-memory
     ports:
       - "8778:8000"
     env_file:
-      - .env
+      - .env.memory
     volumes:
-      - ./history:/app/history      # History db location. By default, it creates a history.db file on the server folder
-      - .:/app                      # Server code. This allows to reload the app when the server code is updated
-      - ../mem0:/app/packages/mem0  # Mem0 library. This allows to reload the app when the library code is updated
+      - ./history:/app/history
+      - .:/app
+      - ../mem0:/app/packages/mem0
     depends_on:
       postgres:
         condition: service_healthy
       neo4j:
         condition: service_healthy
-    command: uvicorn main:app --host 0.0.0.0 --port 8000 --reload  # Enable auto-reload
+      redis:
+        condition: service_healthy
+    command: uvicorn main:app --host 0.0.0.0 --port 8000 --reload
     environment:
-      - PYTHONDONTWRITEBYTECODE=1  # Prevents Python from writing .pyc files
-      - PYTHONUNBUFFERED=1  # Ensures Python output is sent straight to terminal
+      - PYTHONDONTWRITEBYTECODE=1
+      - PYTHONUNBUFFERED=1
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    restart: unless-stopped
 
   postgres:
-      image: ankane/pgvector:v0.5.1
-      restart: on-failure
-      shm_size: "128mb" # Increase this if vacuuming fails with a "no space left on device" error
-      environment:
-        - POSTGRES_USER=postgres
-        - POSTGRES_PASSWORD=postgres
-      healthcheck:
-        test: ["CMD", "pg_isready", "-q", "-d", "postgres", "-U", "postgres"]
-        interval: 5s
-        timeout: 5s
-        retries: 5
-      volumes:
-        - postgres_db:/var/lib/postgresql/data
-      ports:
-        - "8432:5432"
+    image: pgvector/pgvector:pg17
+    container_name: mem0-postgres
+    restart: unless-stopped
+    shm_size: "256mb"
+    environment:
+      - POSTGRES_USER=mem0_user
+      - POSTGRES_PASSWORD=mem0_pass
+      - POSTGRES_DB=mem0_db
+      - POSTGRES_MULTIPLE_DATABASES=mem0_vector_db
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U mem0_user -d mem0_db"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./init-scripts:/docker-entrypoint-initdb.d
+    ports:
+      - "5432:5432"
+    command: >
+      postgres
+      -c shared_preload_libraries=vector
+      -c max_connections=200
+      -c shared_buffers=256MB
+      -c effective_cache_size=1GB
+      -c maintenance_work_mem=64MB
+      -c checkpoint_completion_target=0.9
+      -c wal_buffers=16MB
+      -c default_statistics_target=100
+
   neo4j:
     image: neo4j:5.26.4
-    healthcheck:
-      test: wget http://localhost:7687 || exit 1
-      interval: 1s
-      timeout: 10s
-      retries: 20
-      start_period: 90s
+    container_name: mem0-neo4j
+    restart: unless-stopped
     ports:
-      - "8474:7474" # HTTP
-      - "8687:7687" # Bolt
+      - "7474:7474"
+      - "7687:7687"
     volumes:
       - neo4j_data:/data
+      - neo4j_logs:/logs
     environment:
-      - NEO4J_AUTH=neo4j/mem0graph
-      - NEO4J_PLUGINS=["apoc"]  # Add this line to install APOC
+      - NEO4J_AUTH=neo4j/mem0_graph
+      - NEO4J_PLUGINS=["apoc", "graph-data-science"]
       - NEO4J_apoc_export_file_enabled=true
       - NEO4J_apoc_import_file_enabled=true
       - NEO4J_apoc_import_file_use__neo4j__config=true
+      - NEO4J_dbms_memory_heap_initial__size=512m
+      - NEO4J_dbms_memory_heap_max__size=2G
+      - NEO4J_dbms_memory_pagecache_size=1G
+    healthcheck:
+      test: ["CMD", "cypher-shell", "-u", "neo4j", "-p", "mem0_graph", "RETURN 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+
+  redis:
+    image: redis:7-alpine
+    container_name: mem0-redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    command: >
+      redis-server
+      --appendonly yes
+      --maxmemory 512mb
+      --maxmemory-policy allkeys-lru
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
 
 volumes:
+  postgres_data:
   neo4j_data:
-  postgres_db:
+  neo4j_logs:
+  redis_data:
+
+networks:
+  default:
+    name: mem0-memory-network
+    driver: bridge

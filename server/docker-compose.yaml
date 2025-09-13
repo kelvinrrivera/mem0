@@ -7,8 +7,6 @@ services:
     container_name: mem0-memory
     ports:
       - "8778:8000"
-    env_file:
-      - .env.memory
     volumes:
       - ./history:/app/history
       - .:/app
